@@ -64,6 +64,7 @@ jobs:
 
           echo "=== Disk after clean ==="
           df -h
+
           free -h
 
       - name: Validate build inputs
@@ -86,6 +87,52 @@ jobs:
 
           echo "Source repository: $SOURCE_REPOSITORY"
           echo "Commit SHA:        $COMMIT_SHA"
+
+      - name: Validate matrix build configuration
+        shell: bash
+        env:
+          MATRIX_KEY: ${{ matrix.build_matrix }}
+          MACHINE: ${{ matrix.build_matrix.machine }}
+          KAS_FILE: ${{ matrix.build_matrix.kas_file }}
+          LAVA_NAME: ${{ matrix.build_matrix.lavaname }}
+          BUILD_COMMAND: ${{ matrix.build_matrix.build_command }}
+          IMAGE_NAME: ${{ matrix.build_matrix.image_name }}
+        run: |
+          set -euo pipefail
+
+          echo "=== Matrix build configuration ==="
+          echo "Matrix key:      $MATRIX_KEY"
+          echo "Machine:         $MACHINE"
+          echo "KAS file:        $KAS_FILE"
+          echo "Lava name:       ${LAVA_NAME:-<not-set>}"
+          echo "Build command:   $BUILD_COMMAND"
+          echo "Image name:      $IMAGE_NAME"
+          echo "=================================="
+
+          if [ -z "$MACHINE" ]; then
+            echo "::error::Matrix field 'machine' is empty"
+            exit 1
+          fi
+
+          if [ -z "$KAS_FILE" ]; then
+            echo "::error::Matrix field 'kas_file' is empty"
+            exit 1
+          fi
+
+          if [ -z "$BUILD_COMMAND" ]; then
+            echo "::error::Matrix field 'build_command' is empty"
+            exit 1
+          fi
+
+          if [ -z "$IMAGE_NAME" ]; then
+            echo "::error::Matrix field 'image_name' is empty"
+            exit 1
+          fi
+
+          if ! [[ "$IMAGE_NAME" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+            echo "::error::Invalid image_name: $IMAGE_NAME"
+            exit 1
+          fi
 
       - name: Checkout exact HEAD commit
         uses: actions/checkout@v4
@@ -214,10 +261,9 @@ jobs:
           echo "✅ Hydra Wi-Fi password file prepared"
 
       # -----------------------------------------------------------------------
-      # REPLACED: Instead of a script + systemd service, we now directly bake
-      # the Hydra.nmconnection profile into the rootfs via a ROOTFS_POSTPROCESS
-      # command. NetworkManager reads it on boot and auto-connects — no script
-      # needed.
+      # The Hydra Wi-Fi profile is injected into the root filesystem using a
+      # ROOTFS_POSTPROCESS command. NetworkManager reads this profile on boot
+      # and automatically connects to the Hydra network.
       # -----------------------------------------------------------------------
       - name: Create Wi-Fi post-boot BitBake class
         shell: bash
@@ -231,7 +277,7 @@ jobs:
           class_file="$WORKSPACE/classes/wifi-post-boot.bbclass"
 
           cat > "$class_file" << 'BBCLASS'
-          WIFI_SSID     ?= "Hydra"
+          WIFI_SSID ?= "Hydra"
           WIFI_PASSWORD_FILE ?= "/workspace/video-driver/.hydra_wifi_password"
 
           wifi_inject_nm_profile() {
@@ -245,12 +291,9 @@ jobs:
                   bbfatal "Wi-Fi password file is empty: ${WIFI_PASSWORD_FILE}"
               fi
 
-              # Create the NM system-connections directory in the rootfs
               nm_dir="${IMAGE_ROOTFS}${sysconfdir}/NetworkManager/system-connections"
               install -d "$nm_dir"
 
-              # Write the .nmconnection profile directly — NM auto-connects on boot
-              # No interface-name binding so it works regardless of wlan0 vs wlp1s0
               cat > "$nm_dir/Hydra.nmconnection" << EOF
           [connection]
           id=Hydra
@@ -276,7 +319,6 @@ jobs:
           addr-gen-mode=stable-privacy
           EOF
 
-              # NM refuses to load profiles that are not chmod 600
               chmod 600 "$nm_dir/Hydra.nmconnection"
 
               bbnote "Installed Hydra NM connection profile to ${sysconfdir}/NetworkManager/system-connections/Hydra.nmconnection"
@@ -288,7 +330,7 @@ jobs:
           chmod 644 "$class_file"
 
           echo "✅ Created Wi-Fi BitBake class: $class_file"
-          echo "   Class line count: $(wc -l < "$class_file")"
+          echo "Class line count: $(wc -l < "$class_file")"
 
       - name: Verify Wi-Fi build files
         shell: bash
@@ -302,7 +344,7 @@ jobs:
 
           echo "✅ Wi-Fi BitBake class exists"
           echo "✅ Wi-Fi password file exists"
-          echo "   Workspace: $WORKSPACE"
+          echo "Workspace: $WORKSPACE"
 
       - name: Build image
         uses: qualcomm-linux/video-driver/.github/actions/build@git_enable
@@ -310,15 +352,15 @@ jobs:
           machine: ${{ matrix.build_matrix.machine }}
           docker_image: ${{ inputs.docker_image }}
           kas_file: ${{ matrix.build_matrix.kas_file }}
-          build_command: bitbake qcom-multimedia-proprietary-image
+          build_command: ${{ matrix.build_matrix.build_command }}
           kas_local_conf_header: |
             BBPATH:prepend = "/workspace/video-driver:"
             BBPATH:prepend = "/workspace/video-driver/classes:"
 
             INHERIT:append = " wifi-post-boot"
 
-            WIFI_SSID             = "Hydra"
-            WIFI_PASSWORD_FILE    = "/workspace/video-driver/.hydra_wifi_password"
+            WIFI_SSID          = "Hydra"
+            WIFI_PASSWORD_FILE = "/workspace/video-driver/.hydra_wifi_password"
 
             IMAGE_FEATURES += "enable-adbd"
             IMAGE_INSTALL:append = " git"
@@ -387,13 +429,27 @@ jobs:
         env:
           WORKSPACE: ${{ github.workspace }}
           MACHINE: ${{ matrix.build_matrix.machine }}
+          IMAGE_NAME: ${{ matrix.build_matrix.image_name }}
         run: |
           set -euo pipefail
 
-          symlink_path="$WORKSPACE/build/tmp/deploy/images/$MACHINE/qcom-multimedia-proprietary-image-${MACHINE}.rootfs.qcomflash"
+          deploy_dir="$WORKSPACE/build/tmp/deploy/images/$MACHINE"
+          symlink_path="$deploy_dir/${IMAGE_NAME}-${MACHINE}.rootfs.qcomflash"
+
+          echo "Machine:    $MACHINE"
+          echo "Image name: $IMAGE_NAME"
+          echo "Deploy dir: $deploy_dir"
+          echo "qcomflash:  $symlink_path"
 
           if [ ! -L "$symlink_path" ]; then
             echo "::error::qcomflash symlink not found: $symlink_path"
+            echo
+            echo "Available files in deploy directory:"
+            if [ -d "$deploy_dir" ]; then
+              find "$deploy_dir" -maxdepth 1 -printf '%f\n' | sort
+            else
+              echo "Deploy directory does not exist: $deploy_dir"
+            fi
             exit 1
           fi
 
@@ -408,6 +464,8 @@ jobs:
 
           if [ ! -f "$rootfs_img" ]; then
             echo "::error::rootfs.img not found: $rootfs_img"
+            echo "Resolved qcomflash directory contents:"
+            ls -larth "$resolved_dir"
             exit 1
           fi
 
@@ -427,8 +485,11 @@ jobs:
 
           cp "$rootfs_img" "$rootfs_dest"
 
-          printf '%s\n' "$flash_tar"    >> "$WORKSPACE/artifacts/file_list.txt"
-          printf '%s\n' "$rootfs_dest"  >> "$WORKSPACE/artifacts/file_list.txt"
+          printf '%s\n' "$flash_tar" \
+            >> "$WORKSPACE/artifacts/file_list.txt"
+
+          printf '%s\n' "$rootfs_dest" \
+            >> "$WORKSPACE/artifacts/file_list.txt"
 
           echo "=== Artifact file list ==="
           cat "$WORKSPACE/artifacts/file_list.txt"
@@ -470,6 +531,8 @@ jobs:
         shell: bash
         env:
           MACHINE: ${{ matrix.build_matrix.machine }}
+          IMAGE_NAME: ${{ matrix.build_matrix.image_name }}
+          BUILD_COMMAND: ${{ matrix.build_matrix.build_command }}
           COMMIT_SHA: ${{ inputs.commit_sha }}
           EVENT_NAME: ${{ github.event_name }}
           JOB_STATUS: ${{ job.status }}
@@ -487,7 +550,12 @@ jobs:
             echo
             echo "$summary for $MACHINE"
             echo
+            echo "**Image:** \`$IMAGE_NAME\`"
+            echo
+            echo "**Build command:** \`$BUILD_COMMAND\`"
+            echo
             echo "**Event:** \`$EVENT_NAME\`"
+            echo
             echo "**Commit:** \`$COMMIT_SHA\`"
             echo
             echo "</details>"
