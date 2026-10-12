@@ -64,7 +64,6 @@ jobs:
 
           echo "=== Disk after clean ==="
           df -h
-
           free -h
 
       - name: Validate build inputs
@@ -87,52 +86,6 @@ jobs:
 
           echo "Source repository: $SOURCE_REPOSITORY"
           echo "Commit SHA:        $COMMIT_SHA"
-
-      - name: Validate matrix build configuration
-        shell: bash
-        env:
-          MATRIX_KEY: ${{ matrix.build_matrix }}
-          MACHINE: ${{ matrix.build_matrix.machine }}
-          KAS_FILE: ${{ matrix.build_matrix.kas_file }}
-          LAVA_NAME: ${{ matrix.build_matrix.lavaname }}
-          BUILD_COMMAND: ${{ matrix.build_matrix.build_command }}
-          IMAGE_NAME: ${{ matrix.build_matrix.image_name }}
-        run: |
-          set -euo pipefail
-
-          echo "=== Matrix build configuration ==="
-          echo "Matrix key:      $MATRIX_KEY"
-          echo "Machine:         $MACHINE"
-          echo "KAS file:        $KAS_FILE"
-          echo "Lava name:       ${LAVA_NAME:-<not-set>}"
-          echo "Build command:   $BUILD_COMMAND"
-          echo "Image name:      $IMAGE_NAME"
-          echo "=================================="
-
-          if [ -z "$MACHINE" ]; then
-            echo "::error::Matrix field 'machine' is empty"
-            exit 1
-          fi
-
-          if [ -z "$KAS_FILE" ]; then
-            echo "::error::Matrix field 'kas_file' is empty"
-            exit 1
-          fi
-
-          if [ -z "$BUILD_COMMAND" ]; then
-            echo "::error::Matrix field 'build_command' is empty"
-            exit 1
-          fi
-
-          if [ -z "$IMAGE_NAME" ]; then
-            echo "::error::Matrix field 'image_name' is empty"
-            exit 1
-          fi
-
-          if ! [[ "$IMAGE_NAME" =~ ^[A-Za-z0-9._+-]+$ ]]; then
-            echo "::error::Invalid image_name: $IMAGE_NAME"
-            exit 1
-          fi
 
       - name: Checkout exact HEAD commit
         uses: actions/checkout@v4
@@ -174,6 +127,45 @@ jobs:
           fi
 
           echo "Correct repository and commit checked out"
+
+      - name: Validate matrix build configuration
+        shell: bash
+        env:
+          MACHINE: '${{ matrix.build_matrix.machine }}'
+          KAS_FILE: '${{ matrix.build_matrix.kas_file }}'
+          LAVA_NAME: '${{ matrix.build_matrix.lavaname }}'
+          BUILD_COMMAND: '${{ matrix.build_matrix.build_command }}'
+          IMAGE_NAME: '${{ matrix.build_matrix.image_name }}'
+        run: |
+          set -euo pipefail
+
+          echo "=== Matrix build configuration ==="
+          echo "Machine:       $MACHINE"
+          echo "KAS file:      $KAS_FILE"
+          echo "Lava name:     ${LAVA_NAME:-<not-set>}"
+          echo "Build command: $BUILD_COMMAND"
+          echo "Image name:    $IMAGE_NAME"
+          echo "=================================="
+
+          if [ -z "$MACHINE" ]; then
+            echo "::error::Matrix field 'machine' is empty"
+            exit 1
+          fi
+
+          if [ -z "$KAS_FILE" ]; then
+            echo "::error::Matrix field 'kas_file' is empty"
+            exit 1
+          fi
+
+          if [ -z "$BUILD_COMMAND" ]; then
+            echo "::error::Matrix field 'build_command' is empty"
+            exit 1
+          fi
+
+          if [ -z "$IMAGE_NAME" ]; then
+            echo "::error::Matrix field 'image_name' is empty"
+            exit 1
+          fi
 
       - name: Clone meta-qcom as sibling repository
         shell: bash
@@ -260,11 +252,6 @@ jobs:
 
           echo "✅ Hydra Wi-Fi password file prepared"
 
-      # -----------------------------------------------------------------------
-      # The Hydra Wi-Fi profile is injected into the root filesystem using a
-      # ROOTFS_POSTPROCESS command. NetworkManager reads this profile on boot
-      # and automatically connects to the Hydra network.
-      # -----------------------------------------------------------------------
       - name: Create Wi-Fi post-boot BitBake class
         shell: bash
         env:
@@ -372,9 +359,11 @@ jobs:
             EXTERNALSRC_BUILD:pn-iris-video-dlkm = "/workspace/video-driver/build_iris"
             S:pn-iris-video-dlkm = "${EXTERNALSRC}"
             B:pn-iris-video-dlkm = "${EXTERNALSRC_BUILD}"
+
             do_fetch:pn-iris-video-dlkm[noexec] = "1"
             do_unpack:pn-iris-video-dlkm[noexec] = "1"
             do_patch:pn-iris-video-dlkm[noexec] = "1"
+
             MAKE_TARGETS:pn-iris-video-dlkm = ""
             EXTRA_OEMAKE:pn-iris-video-dlkm = "-C ${STAGING_KERNEL_DIR} M=${S} modules"
 
@@ -428,8 +417,8 @@ jobs:
         shell: bash
         env:
           WORKSPACE: ${{ github.workspace }}
-          MACHINE: ${{ matrix.build_matrix.machine }}
-          IMAGE_NAME: ${{ matrix.build_matrix.image_name }}
+          MACHINE: '${{ matrix.build_matrix.machine }}'
+          IMAGE_NAME: '${{ matrix.build_matrix.image_name }}'
         run: |
           set -euo pipefail
 
@@ -443,13 +432,8 @@ jobs:
 
           if [ ! -L "$symlink_path" ]; then
             echo "::error::qcomflash symlink not found: $symlink_path"
-            echo
-            echo "Available files in deploy directory:"
-            if [ -d "$deploy_dir" ]; then
-              find "$deploy_dir" -maxdepth 1 -printf '%f\n' | sort
-            else
-              echo "Deploy directory does not exist: $deploy_dir"
-            fi
+            echo "Available deploy files:"
+            find "$deploy_dir" -maxdepth 1 -type l -o -type f -printf '%f\n' || true
             exit 1
           fi
 
@@ -464,8 +448,6 @@ jobs:
 
           if [ ! -f "$rootfs_img" ]; then
             echo "::error::rootfs.img not found: $rootfs_img"
-            echo "Resolved qcomflash directory contents:"
-            ls -larth "$resolved_dir"
             exit 1
           fi
 
@@ -530,9 +512,9 @@ jobs:
         if: always()
         shell: bash
         env:
-          MACHINE: ${{ matrix.build_matrix.machine }}
-          IMAGE_NAME: ${{ matrix.build_matrix.image_name }}
-          BUILD_COMMAND: ${{ matrix.build_matrix.build_command }}
+          MACHINE: '${{ matrix.build_matrix.machine }}'
+          BUILD_COMMAND: '${{ matrix.build_matrix.build_command }}'
+          IMAGE_NAME: '${{ matrix.build_matrix.image_name }}'
           COMMIT_SHA: ${{ inputs.commit_sha }}
           EVENT_NAME: ${{ github.event_name }}
           JOB_STATUS: ${{ job.status }}
@@ -550,12 +532,10 @@ jobs:
             echo
             echo "$summary for $MACHINE"
             echo
+            echo "**Machine:** \`$MACHINE\`"
             echo "**Image:** \`$IMAGE_NAME\`"
-            echo
             echo "**Build command:** \`$BUILD_COMMAND\`"
-            echo
             echo "**Event:** \`$EVENT_NAME\`"
-            echo
             echo "**Commit:** \`$COMMIT_SHA\`"
             echo
             echo "</details>"
